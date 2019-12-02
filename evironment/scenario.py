@@ -3,8 +3,10 @@
 
 """
 
+from abc import ABCMeta, abstractmethod
 from random import randint, seed, choice, paretovariate, lognormvariate
 from math import ceil, exp, log
+
 from scipy.stats import truncnorm
 
 from base.queue import Queue, PriorQueue
@@ -43,64 +45,98 @@ class TruncateLogNorm:
 		return exp(tmp.rvs())   # 生成随机数，返回去对数化结果
 
 
-class Generator:
-	
-	def __init__(self):
-		self._type = self._choice()
-	
-	@staticmethod
-	def _choice():
-		return choice(("VoLTE", "Video", "URLLC"))
-	
-	def type(self):
-		"""返回随机生成数据包类型"""
-		return self._type
-	
-	def size(self):
-		"""返回随机生成数据包大小"""
-		if self.type() == "VoLTE":
-			return 40       # Constant, 40 Byte
-		if self.type() == "Video":
-			random_generator = TruncatePareto(x_min=100, x_max=250, param=1.2)      # 截断Pareto分布
-			return random_generator.generate()      # Byte
-		if self.type() == "URLLC":
-			random_generator = TruncateLogNorm(x_min=1e3, x_max=5e6, mu=2e6, sigma=0.722e6)     # 截断正太分布
-			return random_generator.generate()      # Byte
-	
-	def rate(self):
-		"""返回数据包速率大小"""
-		if self.type() == "VoLTE":
-			return 51       # 51 Kbps
-		if self.type() == "Video":
-			return 5e3      # 5 Mbps
-		if self.type() == "URLLC":
-			return 10e3     # 10 Mbps
-
-
-class Package:
+class Package(object, metaclass=ABCMeta):
 	"""数据包接口"""
 	
-	def __init__(self, time, generator=Generator()):            # generator：数据包属性生成器，后续改成默认传参
-		self._time = time                           # 数据包发送时间，slot数
-		self._type = generator.type()               # 服务类型
-		self._size = generator.size()               # 数据包大小
-		self._rate = generator.rate()               # 数据包速率
+	@abstractmethod
+	def __init__(self, time):  # generator：数据包属性生成器，后续改成默认传参
+		self._time = time  # 数据包发送时间，slot数
+	
+	@abstractmethod
+	def size(self):
+		"""返回数据包大小"""
+		pass
+	
+	@abstractmethod
+	def rate(self):
+		"""返回数据包速率"""
+		pass
+	
+	@abstractmethod
+	def service(self):
+		"""返回数据包类型"""
+		pass
+	
+	def time(self):
+		"""返回数据包需求生成时间"""
+		return self._time
 	
 	def interval(self):
 		"""返回数据包发送用时"""
-		return ceil(self._size / self._rate) // 0.5    # 返回的是slot数
+		return ceil(self.size() / self.rate()) // 0.5  # 返回的是slot数
+
+
+class VoLTEPackage(Package):
+	"""VoLTE服务数据包"""
+	
+	def __init__(self, time):
+		super(VoLTEPackage, self).__init__(time)
+		self._type = "VoLTE"
+		self._size = 40     # Byte
+	
+	def size(self): return self._size
+	
+	def rate(self): return 51  # Kbps
+	
+	def service(self): return self._type
+
+
+class VideoPackage(Package):
+	"""Video服务数据包"""
+	
+	def __init__(self, time):
+		super(VideoPackage, self).__init__(time)
+		self._type = "Video"
+		self._rate = 5e3  # 5 Mbps
 	
 	def size(self):
-		"""返回数据包大小"""
-		return self._size
+		random_generator = TruncatePareto(x_min=100, x_max=250, param=1.2)  # 截断Pareto分布
+		return random_generator.generate()  # Byte
 	
-	def rate(self):
-		"""返回数据包速率"""
-		return self._rate
+	def rate(self): return self._rate
 	
-	def service(self):
-		"""返回数据包类型"""
-		return self._type
+	def service(self): return self._type
+
+
+class URLLCPackage(Package):
+	"""URLLC服务数据包"""
+	
+	def __init__(self, time):
+		super(URLLCPackage, self).__init__(time)
+		self._type = "URLLC"
+		self._rate = 10e3  # 10 Mbps
+	
+	def size(self):
+		random_generator = TruncateLogNorm(x_min=1e3, x_max=5e6, mu=2e6, sigma=0.722e6)  # 截断正太分布
+		return random_generator.generate()  # Byte
+	
+	def rate(self): return self._rate
+	
+	def service(self): return self._type
+
+
+class Generator:
+	
+	@classmethod
+	def generator(cls, time: int, service_type: str) -> Package:
+		if service_type == "VoLTE":
+			return VoLTEPackage(time)
+		elif service_type == "Video":
+			return VideoPackage(time)
+		elif service_type == "URLLC":
+			return URLLCPackage(time)
+		else:
+			raise ValueError("Illegal value of service type.")
 
 
 class Event:
@@ -136,16 +172,20 @@ class Packing(Event):
 		custom.add_event(self)
 	
 	def run(self):
-		time, custom = self.time(), self.custom()
-		print(time, "generate package")
-		package = Package(time)
+		time, custom, service_type = self.time(), self.custom(), choice(("VoLTE", "Video", "URLLC"))
+		print(time, "generate {} package".format(service_type))
+		package = Generator.generator(time, service_type)
+		
+		
 		Packing(time + randint(0, 160), custom)     # 引发下一个数据包生成事件
-		if custom.has_queued_package():     # 如果有数据包在等待队列中
-			custom.enqueue(package)         # 加入等待队列
+		
+		
+		if custom.has_queued_package():             # 如果有数据包在等待队列中
+			custom.enqueue(package)                 # 加入等待队列
 			return
 		status = custom.find_channel(package.service())
-		if status is not None:           # 如果信道可占用则执行数据包发送事件
-			print(time, "send package in Packing")      # 数据并未送入等待队列直接发送
+		if status is not None:                              # 如果信道可占用则执行数据包发送事件
+			print(time, "send {} package in Packing".format(package.service()))          # 数据并未送入等待队列直接发送
 			Sending(time + package.interval(), package, custom)
 		else:
 			custom.enqueue(package)
@@ -161,15 +201,15 @@ class Sending(Event):
 	
 	def run(self):
 		time, custom = self.time(), self.custom()
-		print(time, "sending accomplished")
-		custom.free_channel(self.package.service)
+		print(time, "{} sending accomplished".format(self.package.service()))
+		custom.free_channel(self.package.service())
 		custom.count_package_1()                            # 数据包计数
-		custom.total_time_acc(time - self.package.time)
+		custom.total_time_acc(time - self.package.time())
 		if custom.has_queued_package():                     # 如果有数据包在Custom的等待队列中
 			package = custom.next_package()                 # 队头数据包出队列
-			custom.find_channel(package.service)            # 当前数据包发送后，更新信道占用状态channel_status
-			print(time, "send package in Sending")       # 数据从等待队列中提取后发送
-			custom.wait_time_acc(time - package.time)
+			custom.find_channel(package.service())            # 当前数据包发送后，更新信道占用状态channel_status
+			print(time, "send {} package in Sending".format(package.service()))       # 数据从等待队列中提取后发送
+			custom.wait_time_acc(time - package.time())
 			Sending(time + package.send_interval(), package, custom)
 
 
@@ -207,7 +247,7 @@ class Custom:
 		self.total_wait_time = 0
 		self.total_used_time = 0
 		self.package_num = 0
-		self.channel_status = {"VoLTE": True}       # True：可用 False：被占用
+		self.channel_status = {"VoLTE": True, "Video": True, "URLLC": True}       # True：可用 False：被占用
 		
 	def wait_time_acc(self, n):
 		self.total_wait_time += n
@@ -269,5 +309,19 @@ if __name__ == '__main__':
 		"数据包对列剩余", len(cus.wait_line), '\n',
 		"帧利用率", cus.total_wait_time / cus.duration
 	)
+	# for i in range(2000):
+	# 	c = choice(("VoLTE", "Video", "URLLC"))
+	# 	c = "VoLTE"
+		# if c == "VoLTE":
+		# 	pack = VoLTEPackage(time=i)
+		# 	print(i, '\t', pack.service(), pack.size(), pack.rate())
+		# elif c == "Video":
+		# 	pack = VideoPackage(time=i)
+		# 	print(i, '\t', pack.service(), pack.size(), pack.rate())
+		# elif c == "URLLC":
+		# 	pack = URLLCPackage(time=i)
+		# 	print(i, '\t', pack.service(), pack.size(), pack.rate())
+		# pack = Generator.generator(i, c)
+		# print(i, '\t', pack.service(), pack.size(), pack.rate(), pack.interval())
 	
 	pass
