@@ -4,9 +4,8 @@
 """
 
 from abc import ABCMeta, abstractmethod
-from random import randint, seed, choice, paretovariate
+from random import randint, paretovariate, seed, choice
 from math import ceil, exp, log
-
 from scipy.stats import truncnorm
 
 from base.queue import Queue, PriorQueue
@@ -40,7 +39,8 @@ class TruncateLogNorm:
 	def generate(self):
 		tmp = truncnorm(
 			(log(self._x_min) - self._mu) / self._sigma,
-			(log(self._x_max) - self._mu) / self._sigma
+			(log(self._x_max) - self._mu) / self._sigma,
+			loc=self._mu, scale=self._sigma
 		)   # 实例化基于Scipy包的截断正态分布生成器
 		return exp(tmp.rvs())   # 生成随机数，返回去对数化结果
 
@@ -117,7 +117,7 @@ class URLLCPackage(Package):
 		self._rate = 10e3  # 10 Mbps
 	
 	def size(self):
-		random_generator = TruncateLogNorm(x_min=1e3, x_max=5e6, mu=2e6, sigma=0.722e6)  # 截断正太分布
+		random_generator = TruncateLogNorm(x_min=1e6, x_max=5e6, mu=2e6, sigma=0.722e6)  # 截断正太分布
 		return random_generator.generate()  # Byte
 	
 	def rate(self): return self._rate
@@ -164,31 +164,6 @@ class Event:
 		pass
 
 
-class Packing(Event):
-	"""数据包生成事件"""
-	
-	def __init__(self, packing_time, custom):
-		super(Packing, self).__init__(packing_time, custom)
-		custom.add_event(self)
-	
-	def run(self):
-		time, custom, service_type = self.time(), self.custom(), "VoLTE"   # choice(("VoLTE", "Video", "URLLC"))
-		print(time, "generate {} package".format(service_type))
-		package = Generator.generator(time, service_type)
-		
-		Packing(time + randint(0, 6), custom)     # 引发下一个数据包生成事件
-		
-		if custom.has_queued_package(service_type):             # 如果有数据包在等待队列中
-			custom.enqueue(package)                 # 加入等待队列
-			return
-		status = custom.find_channel(package.service())
-		if status is not None:                              # 如果信道可占用则执行数据包发送事件
-			print(time, "send {} package in Packing".format(package.service()))          # 数据并未送入等待队列直接发送
-			Sending(time + package.interval(), package, custom)
-		else:
-			custom.enqueue(package)
-
-
 class VoLTEPacking(Event):
 	"""VoLTE数据包生成事件"""
 	
@@ -207,7 +182,7 @@ class VoLTEPacking(Event):
 			return
 		status = custom.find_channel(package.service())
 		if status is not None:
-			print(time, "send VoLTE package in VoLTEPacking")
+			print(time, "send VoLTE package in VoLTEPacking [{} Byte]".format(package.size()))
 			Sending(time + package.interval(), package, custom)
 		else:
 			custom.enqueue(package)
@@ -231,7 +206,7 @@ class VideoPacking(Event):
 			return
 		status = custom.find_channel(package.service())
 		if status is not None:
-			print(time, "send Video package in VoLTEPacking")
+			print(time, "send Video package in VoLTEPacking [{:.2f} Byte]".format(package.size()))
 			Sending(time + package.interval(), package, custom)
 		else:
 			custom.enqueue(package)
@@ -255,7 +230,7 @@ class URLLCPacking(Event):
 			return
 		status = custom.find_channel(package.service())
 		if status is not None:
-			print(time, "send URLLC package in VoLTEPacking")
+			print(time, "send URLLC package in VoLTEPacking [{:.2f} Byte]".format(package.size()))
 			Sending(time + package.interval(), package, custom)
 		else:
 			custom.enqueue(package)
@@ -278,7 +253,7 @@ class Sending(Event):
 		if custom.has_queued_package(self.package.service()):                     # 如果有数据包在Custom的等待队列中
 			package = custom.next_package(self.package.service())                 # 队头数据包出队列
 			custom.find_channel(package.service())            # 当前数据包发送后，更新信道占用状态channel_status
-			print(time, "send {} package in Sending".format(package.service()))       # 数据从等待队列中提取后发送
+			print(time, "send {} package in Sending [{:.2f} Byte]".format(package.service(), package.size()))       # 数据从等待队列中提取后发送
 			custom.wait_time_acc(time - package.time())
 			Sending(time + package.interval(), package, custom)
 
@@ -382,5 +357,5 @@ if __name__ == '__main__':
 		"数据包队列剩余", [len(value) for value in cus.wait_line.values()], '\n',
 		"帧利用率", cus.total_wait_time / cus.duration
 	)
-	
+	# print(Generator.generator(0, "URLLC").size())
 	pass
