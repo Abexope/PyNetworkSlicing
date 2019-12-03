@@ -194,7 +194,6 @@ class VoLTEPacking(Event):
 		if custom.has_queued_package(self._service_type):
 			custom.enqueue(package)
 			return
-		# status = custom.find_channel(package.service())
 		status = custom.find_channel()
 		if status is not None:
 			print(time, "send VoLTE package in VoLTEPacking [{} Byte]".format(package.size()))
@@ -219,7 +218,6 @@ class VideoPacking(Event):
 		if custom.has_queued_package(self._service_type):
 			custom.enqueue(package)
 			return
-		# status = custom.find_channel(package.service())
 		status = custom.find_channel()
 		if status is not None:
 			print(time, "send Video package in VoLTEPacking [{:.2f} Byte]".format(package.size()))
@@ -244,7 +242,6 @@ class URLLCPacking(Event):
 		if custom.has_queued_package(self._service_type):
 			custom.enqueue(package)
 			return
-		# status = custom.find_channel(package.service())
 		status = custom.find_channel()
 		if status is not None:
 			print(time, "send URLLC package in VoLTEPacking [{:.2f} Byte]".format(package.size()))
@@ -264,14 +261,12 @@ class Sending(Event):
 	def run(self):
 		time, custom = self.time(), self.custom()
 		print(time, "{} sending accomplished".format(self.package.service()))
-		# custom.free_channel(self.package.service())
 		custom.free_channel()
 		custom.count_package_1()                            # 数据包计数
 		custom.total_time_acc(time - self.package.time())
 		if custom.has_queued_package(self.package.service()):                     # 如果有数据包在Custom的等待队列中
 			package = custom.next_package(self.package.service())                 # 队头数据包出队列
-			# custom.find_channel(package.service())            # 当前数据包发送后，更新信道占用状态channel_status
-			custom.find_channel()
+			custom.find_channel()       # 当前数据包发送后，更新信道占用状态channel_status
 			print(time, "send {} package in Sending [{:.2f} Byte]".format(package.service(), package.size()))       # 数据从等待队列中提取后发送
 			custom.wait_time_acc(time - package.time())
 			Sending(time + package.interval(), package, custom)
@@ -311,7 +306,6 @@ class Custom:
 		self.total_wait_time = 0
 		self.total_used_time = 0
 		self.package_num = 0
-		# self.channel_status = {"VoLTE": True, "Video": True, "URLLC": True}       # True：可用 False：被占用
 		self.channel_status = True
 		
 	def wait_time_acc(self, n):
@@ -326,41 +320,18 @@ class Custom:
 	def has_queued_package(self, service_type):
 		return not self.wait_line[service_type].is_empty()
 	
-	# def find_channel(self, service: str) -> bool or None:     # 占用信道
-	# 	"""
-	# 	True -> False
-	# 	:param service: 服务类型 VoLTE Video URLLC
-	# 	:return:
-	# 	"""
-	# 	if self.channel_status[service]:
-	# 		self.channel_status[service] = not self.channel_status[service]
-	# 		return service
-	
 	def find_channel(self) -> bool or None:     # 占用信道
 		"""
 		True -> False
-		:param service: 服务类型 VoLTE Video URLLC
 		:return:
 		"""
 		if self.channel_status:
 			self.channel_status = not self.channel_status
 			return self.channel_status
-		
-	# def free_channel(self, service) -> None:     # 释放信道
-	# 	"""
-	# 	False -> True
-	# 	:param service: 服务类型 VoLTE Video URLLC
-	# 	:return:
-	# 	"""
-	# 	if not self.channel_status[service]:
-	# 		self.channel_status[service] = not self.channel_status[service]
-	# 	else:
-	# 		raise ValueError("Clear {} gate error".format(service))
 	
 	def free_channel(self) -> None:     # 释放信道
 		"""
 		False -> True
-		:param service: 服务类型 VoLTE Video URLLC
 		:return:
 		"""
 		if not self.channel_status:
