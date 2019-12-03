@@ -63,6 +63,11 @@ class Package(object, metaclass=ABCMeta):
 		pass
 	
 	@abstractmethod
+	def inter_arrival(self):
+		"""返回下一数据包需求发生的时间间隔"""
+		pass
+	
+	@abstractmethod
 	def service(self):
 		"""返回数据包类型"""
 		pass
@@ -88,6 +93,9 @@ class VoLTEPackage(Package):
 	
 	def rate(self): return 51  # Kbps
 	
+	def inter_arrival(self):
+		pass
+	
 	def service(self): return self._type
 
 
@@ -105,6 +113,9 @@ class VideoPackage(Package):
 	
 	def rate(self): return self._rate
 	
+	def inter_arrival(self):
+		pass
+	
 	def service(self): return self._type
 
 
@@ -121,6 +132,9 @@ class URLLCPackage(Package):
 		return random_generator.generate()  # Byte
 	
 	def rate(self): return self._rate
+	
+	def inter_arrival(self):
+		pass
 	
 	def service(self): return self._type
 
@@ -180,7 +194,8 @@ class VoLTEPacking(Event):
 		if custom.has_queued_package(self._service_type):
 			custom.enqueue(package)
 			return
-		status = custom.find_channel(package.service())
+		# status = custom.find_channel(package.service())
+		status = custom.find_channel()
 		if status is not None:
 			print(time, "send VoLTE package in VoLTEPacking [{} Byte]".format(package.size()))
 			Sending(time + package.interval(), package, custom)
@@ -204,7 +219,8 @@ class VideoPacking(Event):
 		if custom.has_queued_package(self._service_type):
 			custom.enqueue(package)
 			return
-		status = custom.find_channel(package.service())
+		# status = custom.find_channel(package.service())
+		status = custom.find_channel()
 		if status is not None:
 			print(time, "send Video package in VoLTEPacking [{:.2f} Byte]".format(package.size()))
 			Sending(time + package.interval(), package, custom)
@@ -228,7 +244,8 @@ class URLLCPacking(Event):
 		if custom.has_queued_package(self._service_type):
 			custom.enqueue(package)
 			return
-		status = custom.find_channel(package.service())
+		# status = custom.find_channel(package.service())
+		status = custom.find_channel()
 		if status is not None:
 			print(time, "send URLLC package in VoLTEPacking [{:.2f} Byte]".format(package.size()))
 			Sending(time + package.interval(), package, custom)
@@ -247,12 +264,14 @@ class Sending(Event):
 	def run(self):
 		time, custom = self.time(), self.custom()
 		print(time, "{} sending accomplished".format(self.package.service()))
-		custom.free_channel(self.package.service())
+		# custom.free_channel(self.package.service())
+		custom.free_channel()
 		custom.count_package_1()                            # 数据包计数
 		custom.total_time_acc(time - self.package.time())
 		if custom.has_queued_package(self.package.service()):                     # 如果有数据包在Custom的等待队列中
 			package = custom.next_package(self.package.service())                 # 队头数据包出队列
-			custom.find_channel(package.service())            # 当前数据包发送后，更新信道占用状态channel_status
+			# custom.find_channel(package.service())            # 当前数据包发送后，更新信道占用状态channel_status
+			custom.find_channel()
 			print(time, "send {} package in Sending [{:.2f} Byte]".format(package.service(), package.size()))       # 数据从等待队列中提取后发送
 			custom.wait_time_acc(time - package.time())
 			Sending(time + package.interval(), package, custom)
@@ -292,7 +311,8 @@ class Custom:
 		self.total_wait_time = 0
 		self.total_used_time = 0
 		self.package_num = 0
-		self.channel_status = {"VoLTE": True, "Video": True, "URLLC": True}       # True：可用 False：被占用
+		# self.channel_status = {"VoLTE": True, "Video": True, "URLLC": True}       # True：可用 False：被占用
+		self.channel_status = True
 		
 	def wait_time_acc(self, n):
 		self.total_wait_time += n
@@ -306,26 +326,47 @@ class Custom:
 	def has_queued_package(self, service_type):
 		return not self.wait_line[service_type].is_empty()
 	
-	def find_channel(self, service: str) -> bool or None:     # 占用信道
+	# def find_channel(self, service: str) -> bool or None:     # 占用信道
+	# 	"""
+	# 	True -> False
+	# 	:param service: 服务类型 VoLTE Video URLLC
+	# 	:return:
+	# 	"""
+	# 	if self.channel_status[service]:
+	# 		self.channel_status[service] = not self.channel_status[service]
+	# 		return service
+	
+	def find_channel(self) -> bool or None:     # 占用信道
 		"""
 		True -> False
 		:param service: 服务类型 VoLTE Video URLLC
 		:return:
 		"""
-		if self.channel_status[service]:
-			self.channel_status[service] = not self.channel_status[service]
-			return service
+		if self.channel_status:
+			self.channel_status = not self.channel_status
+			return self.channel_status
 		
-	def free_channel(self, service) -> None:     # 释放信道
+	# def free_channel(self, service) -> None:     # 释放信道
+	# 	"""
+	# 	False -> True
+	# 	:param service: 服务类型 VoLTE Video URLLC
+	# 	:return:
+	# 	"""
+	# 	if not self.channel_status[service]:
+	# 		self.channel_status[service] = not self.channel_status[service]
+	# 	else:
+	# 		raise ValueError("Clear {} gate error".format(service))
+	
+	def free_channel(self) -> None:     # 释放信道
 		"""
 		False -> True
 		:param service: 服务类型 VoLTE Video URLLC
 		:return:
 		"""
-		if not self.channel_status[service]:
-			self.channel_status[service] = not self.channel_status[service]
+		if not self.channel_status:
+			self.channel_status = not self.channel_status
 		else:
-			raise ValueError("Clear {} gate error".format(service))
+			raise ValueError("Clear gate error")
 	
 	def add_event(self, event):
 		self.simulator.add_event(event)
@@ -357,5 +398,4 @@ if __name__ == '__main__':
 		"数据包队列剩余", [len(value) for value in cus.wait_line.values()], '\n',
 		"帧利用率", cus.total_wait_time / cus.duration
 	)
-	# print(Generator.generator(0, "URLLC").size())
 	pass
