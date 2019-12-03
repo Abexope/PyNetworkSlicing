@@ -4,7 +4,7 @@
 """
 
 from abc import ABCMeta, abstractmethod
-from random import randint, paretovariate, seed, choice
+from random import randint, paretovariate, expovariate, seed, choice
 from math import ceil, exp, log
 from scipy.stats import truncnorm
 
@@ -15,22 +15,34 @@ DURATION = 2000     # 一帧1000毫秒，2000个slot，每个slot0.5毫秒
 # seed(0)
 
 
-class TruncatePareto:
+class BaseDistribution(metaclass=ABCMeta):
+	"""随机数生成器接口"""
+	
+	@abstractmethod
+	def __init__(self, *args): pass
+	
+	@abstractmethod
+	def generate(self): pass
+
+
+class TruncatePareto(BaseDistribution):
 	"""截断Pareto分布"""
 	
 	def __init__(self, x_min, x_max, param):
+		super(TruncatePareto, self).__init__()
 		self._x_min = x_min
 		self._x_max = x_max
 		self._param = param     # Pareto分布形状参数
 	
 	def generate(self):
 		return min(self._x_min + paretovariate(self._param), self._x_max)
-	
-	
-class TruncateLogNorm:
+
+
+class TruncateLogNorm(BaseDistribution):
 	"""截断正态分布"""
 	
 	def __init__(self, x_min, x_max, mu, sigma):
+		super(TruncateLogNorm, self).__init__()
 		self._x_min = x_min     # 线性上限
 		self._x_max = x_max     # 线性下限
 		self._mu = mu
@@ -42,7 +54,18 @@ class TruncateLogNorm:
 			(log(self._x_max) - self._mu) / self._sigma,
 			loc=self._mu, scale=self._sigma
 		)   # 实例化基于Scipy包的截断正态分布生成器
-		return exp(tmp.rvs())   # 生成随机数，返回去对数化结果
+		return exp(tmp.rvs())  # 生成随机数，返回去对数化结果
+
+
+class Exponent(BaseDistribution):
+	"""指数分布"""
+	
+	def __init__(self, mu):
+		super(Exponent, self).__init__()
+		self._mu = mu
+	
+	def generate(self):
+		return expovariate(1 / self._mu)
 
 
 class Package(object, metaclass=ABCMeta):
@@ -87,14 +110,14 @@ class VoLTEPackage(Package):
 	def __init__(self, time):
 		super(VoLTEPackage, self).__init__(time)
 		self._type = "VoLTE"
-		self._size = 40     # Byte
+		self._rate = 51         # Kbps
 	
-	def size(self): return self._size
+	def size(self): return 40   # Byte，VoLTE服务的数据包大小为常量
 	
-	def rate(self): return 51  # Kbps
+	def rate(self): return self._rate
 	
 	def inter_arrival(self):
-		pass
+		return randint(0, 320)     # VoLTE需求生成间隔服从0~160ms的均匀分布，即0~320个slot
 	
 	def service(self): return self._type
 
@@ -105,16 +128,19 @@ class VideoPackage(Package):
 	def __init__(self, time):
 		super(VideoPackage, self).__init__(time)
 		self._type = "Video"
-		self._rate = 5e3  # 5 Mbps
+		self._rate = 5e3    # 5 Mbps (以Kbps为单位)
 	
 	def size(self):
-		random_generator = TruncatePareto(x_min=100, x_max=250, param=1.2)  # 截断Pareto分布
-		return random_generator.generate()  # Byte
+		# Video服务的数据包大小服从均值为100Byte，最大值为250Byte，形状参数为1.2的Pareto分布
+		random_generator = TruncatePareto(x_min=96, x_max=250, param=1.2)  # 截断Pareto分布
+		return int(ceil(random_generator.generate()))  # Byte
 	
 	def rate(self): return self._rate
 	
 	def inter_arrival(self):
-		pass
+		# Video服务的生成间隔服从均值为6ms，最大值为12.5ms，形状参数为1.2的Pareto分布，即约11~25个slot
+		random_generator = TruncatePareto(x_min=11, x_max=25, param=1.2)
+		return ceil(random_generator.generate())
 	
 	def service(self): return self._type
 
@@ -125,16 +151,19 @@ class URLLCPackage(Package):
 	def __init__(self, time):
 		super(URLLCPackage, self).__init__(time)
 		self._type = "URLLC"
-		self._rate = 10e3  # 10 Mbps
+		self._rate = 10e3  # 10 Mbps (以Kbps为单位)
 	
 	def size(self):
-		random_generator = TruncateLogNorm(x_min=1e6, x_max=5e6, mu=2e6, sigma=0.722e6)  # 截断正太分布
+		# URLLC服务的数据包大小服从均值为2MB，标准差为0.722MB，最大值为5MB的截断对数正态分布
+		random_generator = TruncateLogNorm(x_min=0.55e6, x_max=5e6, mu=2e6, sigma=0.722e6)  # 截断对数正太分布
 		return random_generator.generate()  # Byte
 	
 	def rate(self): return self._rate
 	
 	def inter_arrival(self):
-		pass
+		# URLLC服务的需求生成间隔服从均值为180ms的指数分布，即360个slot
+		random_generator = Exponent(mu=360)
+		return ceil(random_generator.generate())
 	
 	def service(self): return self._type
 
@@ -190,7 +219,7 @@ class VoLTEPacking(Event):
 		time, custom = self.time(), self.custom()
 		print(time, "generate {} package in VoLTEPacking".format(self._service_type))
 		package = Generator.generator(time, self._service_type)     # 生成当前事件的数据包
-		VoLTEPacking(time + randint(0, 160), custom)                # 实例化引发下一个同种数据包生成事件对象，直接进入custom的事件队列
+		VoLTEPacking(time + package.inter_arrival(), custom)                # 实例化引发下一个同种数据包生成事件对象，直接进入custom的事件队列
 		if custom.has_queued_package(self._service_type):
 			custom.enqueue(package)
 			return
@@ -200,8 +229,8 @@ class VoLTEPacking(Event):
 			Sending(time + package.interval(), package, custom)
 		else:
 			custom.enqueue(package)
-			
-			
+
+
 class VideoPacking(Event):
 	"""Video数据包生成事件"""
 	
@@ -214,7 +243,7 @@ class VideoPacking(Event):
 		time, custom = self.time(), self.custom()
 		print(time, "generate {} package in VoLTEPacking".format(self._service_type))
 		package = Generator.generator(time, self._service_type)  # 生成当前事件的数据包
-		VideoPacking(time + randint(0, 160), custom)  # 实例化引发下一个同种数据包生成事件对象，直接进入custom的事件队列
+		VideoPacking(time + package.inter_arrival(), custom)  # 实例化引发下一个同种数据包生成事件对象，直接进入custom的事件队列
 		if custom.has_queued_package(self._service_type):
 			custom.enqueue(package)
 			return
@@ -238,7 +267,7 @@ class URLLCPacking(Event):
 		time, custom = self.time(), self.custom()
 		print(time, "generate {} package in VoLTEPacking".format(self._service_type))
 		package = Generator.generator(time, self._service_type)  # 生成当前事件的数据包
-		URLLCPacking(time + randint(0, 160), custom)  # 实例化引发下一个同种数据包生成事件对象，直接进入custom的事件队列
+		URLLCPacking(time + package.inter_arrival(), custom)  # 实例化引发下一个同种数据包生成事件对象，直接进入custom的事件队列
 		if custom.has_queued_package(self._service_type):
 			custom.enqueue(package)
 			return
@@ -320,8 +349,9 @@ class Custom:
 	def has_queued_package(self, service_type):
 		return not self.wait_line[service_type].is_empty()
 	
-	def find_channel(self) -> bool or None:     # 占用信道
+	def find_channel(self) -> bool or None:
 		"""
+		占用信道
 		True -> False
 		:return:
 		"""
@@ -329,8 +359,9 @@ class Custom:
 			self.channel_status = not self.channel_status
 			return self.channel_status
 	
-	def free_channel(self) -> None:     # 释放信道
+	def free_channel(self) -> None:
 		"""
+		释放信道
 		False -> True
 		:return:
 		"""
@@ -341,23 +372,23 @@ class Custom:
 	
 	def add_event(self, event):
 		self.simulator.add_event(event)
-		
+	
 	def current_time(self):
 		return self.simulator.current_time()
 	
 	def enqueue(self, package):
 		self.wait_line[package.service()].enqueue(package)
-		
+	
 	def next_package(self, service_type):
 		return self.wait_line[service_type].dequeue()
 	
 	def simulate(self):
 		# 不同事件、不同用户生成的入口，通过直接实例化对象的方式将自身传入到custom中
 		VoLTEPacking(packing_time=0, custom=self)
-		VideoPacking(packing_time=0, custom=self)
-		URLLCPacking(packing_time=0, custom=self)
+		VideoPacking(packing_time=10, custom=self)
+		URLLCPacking(packing_time=100, custom=self)
 		self.simulator.run()
-		
+
 
 if __name__ == '__main__':
 	cus = Custom(DURATION)
@@ -367,6 +398,6 @@ if __name__ == '__main__':
 		"总候时", cus.total_wait_time, '\n',
 		"总包数", cus.package_num, '\n',
 		"数据包队列剩余", [len(value) for value in cus.wait_line.values()], '\n',
-		"帧利用率", cus.total_wait_time / cus.duration
+		"帧利用率", cus.total_wait_time / cus.duration      # 目前不准，还在开发中……
 	)
 	pass
